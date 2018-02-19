@@ -5,7 +5,7 @@ import collections
 from urllib.parse import scheme_chars
 import re
 import queue
-
+import threading
 from bs4 import BeautifulSoup
 
 aP = argparse.ArgumentParser(description="Scrapes web links")
@@ -79,8 +79,6 @@ class ATag(object):
         except Exception as msg:
             return []
 
-        print("done")
-
         self.page_code = html_page.getcode()
 
         if self.page_code == 404:
@@ -99,7 +97,9 @@ class ATag(object):
                 self.broken = True
         except Exception :
             pass
+
         VisitCache.visit_urls.add(self)
+        return []
 
     def mark_visit(self):
         VisitCache.visit_urls.add(self)
@@ -147,30 +147,50 @@ class Crawler(object):
 
     def __init__(self):
         self.q = queue.Queue()
+        self.e = threading.Event()
+        threading.Thread(target=self.crawl_worker).start()
+        threading.Thread(target=self.crawl_worker).start()
+        threading.Thread(target=self.crawl_worker).start()
+        threading.Thread(target=self.crawl_worker).start()
 
-    @classmethod
-    def crawl(cls):
-        urls = set()
+    def crawl(self):
+        self.urls = set()
         for url in VisitCache.urls:
             if VisitCache.main_url.domain == url.domain:
-                urls.update(url.visit())
+                self.urls.update(url.visit())
             else:
                 url.visit_dry()
 
-
-        VisitCache.urls.update(urls)
+        VisitCache.urls.update(self.urls)
         VisitCache.urls.difference_update(VisitCache.visit_urls)
 
         if len(VisitCache.urls) == 0:
             return
-        cls.crawl()
+        self.crawl()
 
-    @classmethod
-    def crawl_worker(cls):
-        while not self.q.empty():
-            task = q.get()
-            task()
-            q.task_done()
+    def multi_crawl(self):
+        self.urls = set()
+        self.e = threading.Event()
+        for url in VisitCache.urls:
+            if VisitCache.main_url.domain == url.domain:
+                self.q.put(url.visit)
+            else:
+                self.q.put(url.visit_dry)
+        self.q.join()
+        self.e.set()
+        VisitCache.urls.update(self.urls)
+        VisitCache.urls.difference_update(VisitCache.visit_urls)
+        if len(VisitCache.urls) == 0:
+            return
+        self.multi_crawl()
+
+    def crawl_worker(self):
+        while True:
+            task = self.q.get()
+            if task is None:
+                break
+            self.urls.update(task())
+            self.q.task_done()
 
 
 
@@ -191,7 +211,13 @@ if __name__ == '__main__':
     main_url_o = ATag(arguments.url)
     VisitCache.main_url = main_url_o
     VisitCache.urls.update([main_url_o])
-    Crawler.crawl()
+    c = Crawler()
+    c.multi_crawl()
+    c.q.put(None)
+    c.q.put(None)
+    c.q.put(None)
+    c.q.put(None)
+
     if arguments.mulch is not None:
         VisitCache.print_local_not_broken()
     else:

@@ -16,6 +16,8 @@ aP.add_argument('--ofilem', metavar='o', help="output to file")
 
 aP.add_argument('--limit' , metavar='l', help="limit search to given domain")
 
+aP.add_argument('--threaded', metavar='t', help="number of threads (defaults to 4 threads)",type=int,default=4)
+
 aP.add_argument('--mulch', metavar='m', help="output only the URLs of pages within the domain and not broken", action='store_const', const=True)
 
 
@@ -72,15 +74,17 @@ class ATag(object):
         VisitCache.visit_urls.add(self)
         html_page = None
         try:
-            html_page = urllib.request.urlopen(self.url)
+            html_page = urllib.request.urlopen(self.url,timeout=2)
         except urllib.error.HTTPError as msg:
-            req = urllib.request.Request(self.url, headers={'User-Agent' : "Love Browser"})
-            html_page = urllib.request.urlopen(req)
+            try:
+                req = urllib.request.Request(self.url, headers={'User-Agent' : "Love Browser"})
+                html_page = urllib.request.urlopen(req,timeout=2)
+            except:
+                return []
         except Exception as msg:
             return []
 
         self.page_code = html_page.getcode()
-
         if self.page_code == 404:
             self.broken = True
 
@@ -91,7 +95,7 @@ class ATag(object):
 
     def visit_dry(self):
         try:
-            html_page = urllib.request.urlopen(self.url)
+            html_page = urllib.request.urlopen(self.url,timeout=2)
             self.page_code = html_page.getcode()
             if self.page_code == 404:
                 self.broken = True
@@ -122,8 +126,12 @@ class VisitCache(object):
         pass
     @classmethod
     def print_found_urls(cls):
+        shown = 0
         for url in cls.visit_urls:
             print(url.url + " : ", "Broken? : " + str(url.broken))
+            shown += 1
+
+        print("Total Urls Visited ", str(len(cls.visit_urls)), " Shown : q", str(shown))
 
     @classmethod
     def print_local_urls(cls):
@@ -145,22 +153,26 @@ class VisitCache(object):
 
 class Crawler(object):
 
-    def __init__(self):
+    def __init__(self,workers=4):
+        self.i = 0
         self.q = queue.Queue()
         self.e = threading.Event()
-        threading.Thread(target=self.crawl_worker).start()
-        threading.Thread(target=self.crawl_worker).start()
-        threading.Thread(target=self.crawl_worker).start()
-        threading.Thread(target=self.crawl_worker).start()
+        self.workers = workers
+        for i in range(workers):
+            threading.Thread(target=self.crawl_worker).start()
 
+    def quit_workers(self):
+        for i in range(self.workers):
+            self.q.put(None)
     def crawl(self):
         self.urls = set()
         for url in VisitCache.urls:
             if VisitCache.main_url.domain == url.domain:
                 self.urls.update(url.visit())
+                self.i+= 1
             else:
                 url.visit_dry()
-
+                self.i += 1
         VisitCache.urls.update(self.urls)
         VisitCache.urls.difference_update(VisitCache.visit_urls)
 
@@ -177,7 +189,6 @@ class Crawler(object):
             else:
                 self.q.put(url.visit_dry)
         self.q.join()
-        self.e.set()
         VisitCache.urls.update(self.urls)
         VisitCache.urls.difference_update(VisitCache.visit_urls)
         if len(VisitCache.urls) == 0:
@@ -191,8 +202,7 @@ class Crawler(object):
                 break
             self.urls.update(task())
             self.q.task_done()
-
-
+            self.i += 1
 
 
 
@@ -211,12 +221,13 @@ if __name__ == '__main__':
     main_url_o = ATag(arguments.url)
     VisitCache.main_url = main_url_o
     VisitCache.urls.update([main_url_o])
-    c = Crawler()
-    c.multi_crawl()
-    c.q.put(None)
-    c.q.put(None)
-    c.q.put(None)
-    c.q.put(None)
+    if arguments.threaded is not None:
+        c = Crawler(workers=arguments.threaded)
+        c.multi_crawl()
+        c.quit_workers()
+    else:
+        c = Crawler()
+        c.crawl()
 
     if arguments.mulch is not None:
         VisitCache.print_local_not_broken()

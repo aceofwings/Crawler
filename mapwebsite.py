@@ -7,6 +7,7 @@ import re
 import queue
 import threading
 from bs4 import BeautifulSoup
+import time
 
 aP = argparse.ArgumentParser(description="Scrapes web links")
 
@@ -20,13 +21,19 @@ aP.add_argument('--threaded', metavar='t', help="number of threads (defaults to 
 
 aP.add_argument('--mulch', metavar='m', help="output only the URLs of pages within the domain and not broken", action='store_const', const=True)
 
+aP.add_argument('--verbose', metavar='p', help="print out stuff",action='store_const', const=True)
+
 
 IP_RE = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
 
+
+verbose = False
 #list of known tld exceptions.
 tldExceptions = ['co.uk','com','gov','net','org']
 #remove the https to expose full domain
 SCHEME_RE = re.compile(r'^([' + scheme_chars + ']+:)?//')
+
+broken_pages = []
 
 class ATag(object):
     broken = False
@@ -72,23 +79,32 @@ class ATag(object):
     def visit(self):
         """ return a list of urls for this page """
         VisitCache.visit_urls.add(self)
+        if verbose:
+            print("Visiting " + self.url)
         html_page = None
         try:
-            html_page = urllib.request.urlopen(self.url,timeout=2)
+            html_page = urllib.request.urlopen(self.url,timeout=10)
         except urllib.error.HTTPError as msg:
             try:
                 req = urllib.request.Request(self.url, headers={'User-Agent' : "Love Browser"})
-                html_page = urllib.request.urlopen(req,timeout=2)
-            except:
+                html_page = urllib.request.urlopen(req,timeout=10)
+            except Exception as msg:
+                self.broken = True
+                print(msg)
+                broken_pages.append(self)
                 return []
         except Exception as msg:
             return []
 
         self.page_code = html_page.getcode()
         if self.page_code == 404:
+            broken_pages.append(self)
             self.broken = True
-
-        soup = BeautifulSoup(html_page, 'html.parser')
+        soup = None
+        try:
+            soup = BeautifulSoup(html_page, 'html.parser')
+        except:
+            return []
         return [ATag(a_tag['href']) for a_tag in soup.findAll('a', href=True)]
 
 
@@ -145,6 +161,15 @@ class VisitCache(object):
             if url.domain == cls.main_url.domain and not url.broken:
                 print(url.url + " : ", "Broken? : " + str(url.broken))
 
+    @classmethod
+    def print_broken_urls(cls):
+        print("=================BROKEN PAGES ============================")
+        for url in broken_pages:
+            print (url.url)
+
+        print("Number broken " + str(len(broken_pages)) + " pages" )
+
+
 
 
 
@@ -159,10 +184,14 @@ class Crawler(object):
         self.e = threading.Event()
         self.workers = workers
         for i in range(workers):
-            threading.Thread(target=self.crawl_worker).start()
+            t = threading.Thread(target=self.crawl_worker)
+            t.daemon = True
+            t.start()
 
     def quit_workers(self):
         for i in range(self.workers):
+            with self.q.mutex:
+                self.q.queue.clear()
             self.q.put(None)
     def crawl(self):
         self.urls = set()
@@ -217,19 +246,30 @@ def find_tld(lower_labels):
 
 
 if __name__ == '__main__':
-    arguments = aP.parse_args()
-    main_url_o = ATag(arguments.url)
-    VisitCache.main_url = main_url_o
-    VisitCache.urls.update([main_url_o])
-    if arguments.threaded is not None:
-        c = Crawler(workers=arguments.threaded)
-        c.multi_crawl()
-        c.quit_workers()
-    else:
-        c = Crawler()
-        c.crawl()
+    try:
+        arguments = aP.parse_args()
+        main_url_o = ATag(arguments.url)
+        VisitCache.main_url = main_url_o
+        VisitCache.urls.update([main_url_o])
+        verbose = arguments.verbose
+        c = None
+        if arguments.threaded is not None:
+            c = Crawler(workers=arguments.threaded)
+            c.multi_crawl()
+            c.quit_workers()
+        else:
+            c = Crawler()
+            c.crawl()
 
-    if arguments.mulch is not None:
-        VisitCache.print_local_not_broken()
-    else:
+        if arguments.mulch is not None:
+            VisitCache.print_local_not_broken()
+        else:
+            VisitCache.print_found_urls()
+    except SystemExit:
+        c.quit_workers()
         VisitCache.print_found_urls()
+        VisitCache.print_broken_urls()
+    except KeyboardInterrupt:
+        c.quit_workers()
+        VisitCache.print_found_urls()
+        VisitCache.print_broken_urls()

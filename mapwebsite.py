@@ -178,6 +178,8 @@ class VisitCache(object):
 
 class Crawler(object):
 
+    
+
     def __init__(self,workers=4):
         self.i = 0
         self.q = queue.Queue()
@@ -205,10 +207,6 @@ class Crawler(object):
         VisitCache.urls.update(self.urls)
         VisitCache.urls.difference_update(VisitCache.visit_urls)
 
-        if len(VisitCache.urls) == 0:
-            return
-        self.crawl()
-
     def multi_crawl(self):
         self.urls = set()
         self.e = threading.Event()
@@ -220,9 +218,9 @@ class Crawler(object):
         self.q.join()
         VisitCache.urls.update(self.urls)
         VisitCache.urls.difference_update(VisitCache.visit_urls)
+
         if len(VisitCache.urls) == 0:
             return
-        self.multi_crawl()
 
     def crawl_worker(self):
         while True:
@@ -246,16 +244,19 @@ def find_tld(lower_labels):
 
 
 if __name__ == '__main__':
+    arguments = aP.parse_args()
+    c = Crawler(workers=arguments.threaded)
+
+
+
     try:
-        arguments = aP.parse_args()
         main_url_o = ATag(arguments.url)
         VisitCache.main_url = main_url_o
         VisitCache.urls.update([main_url_o])
         verbose = arguments.verbose
-        c = None
         if arguments.threaded is not None:
-            c = Crawler(workers=arguments.threaded)
-            c.multi_crawl()
+            while len(VisitCache.urls) != 0:
+                c.multi_crawl()
             c.quit_workers()
         else:
             c = Crawler()
@@ -270,6 +271,10 @@ if __name__ == '__main__':
         VisitCache.print_found_urls()
         VisitCache.print_broken_urls()
     except KeyboardInterrupt:
+        c.quit_workers()
+        VisitCache.print_found_urls()
+        VisitCache.print_broken_urls()
+    except RecursionError as re:
         c.quit_workers()
         VisitCache.print_found_urls()
         VisitCache.print_broken_urls()
